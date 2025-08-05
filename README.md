@@ -79,6 +79,11 @@ python enhanced_microcap_trader.py portfolio
 python enhanced_microcap_trader.py candidates
 ```
 
+### Generate Weekly Research Report
+```bash
+python weekly_research/weekly_research_generator.py
+```
+
 ## 📊 Scoring System
 
 The system uses a comprehensive 0-100 scoring algorithm:
@@ -113,11 +118,26 @@ Volatility adjustments reduce position size for high volatility stocks.
 microcap_trader/
 ├── enhanced_microcap_trader.py  # Main trading system
 ├── enhanced_data_manager.py      # Data management
+├── config.py                    # Configuration settings
 ├── portfolio.csv                 # Portfolio data
 ├── candidates.csv                # Candidate stocks
 ├── daily_report.md              # Daily reports
 ├── requirements.txt              # Dependencies
 ├── env_template.txt             # Environment template
+├── PRODUCTION_CHECKLIST.md      # Production guidelines
+├── weekly_research/             # Weekly research reports
+│   ├── weekly_research_generator.py  # Report generator
+│   ├── run_weekly_report.bat    # Windows batch script
+│   ├── run_weekly_report.ps1    # PowerShell script
+│   ├── report_generator.py      # Daily report generator
+│   └── README.md                # Research documentation
+├── machine_learning/            # ML trading bots & analysis
+│   ├── advanced_trading_bot.py # Advanced trading bot with multiple strategies
+│   ├── trading_recommendations.py # Simple recommendations
+│   ├── trading_analysis.py     # P&L analysis
+│   ├── trading_history_manager.py # History management
+│   ├── trading_history.csv     # Trading data
+│   └── README.md               # ML documentation
 └── README.md                    # This file
 ```
 
@@ -128,6 +148,55 @@ microcap_trader/
 - **High Momentum**: Top performers by 1-day change
 - **Trading Recommendations**: Strong buy signals
 - **Risk Management Tips**: Stop losses and profit targets
+
+## 📊 Weekly Research Reports
+
+Comprehensive weekly analysis available in the `weekly_research/` folder:
+
+- **Portfolio Performance**: Detailed analysis of all positions
+- **Individual Stock Analysis**: Technical and fundamental analysis
+- **Sector Analysis**: Market sentiment and sector rotation
+- **Trading Recommendations**: Actionable advice for each position
+- **Risk Management**: Stop loss and take profit targets
+- **Next Week's Focus**: Strategic planning and priorities
+
+**Generate weekly report:**
+```bash
+python weekly_research/weekly_research_generator.py
+```
+
+## 🤖 Machine Learning Trading Bots
+
+Advanced trading bots that learn from your trading history and provide intelligent recommendations:
+
+- **Pattern Recognition**: Analyzes your successful trades to identify winning patterns
+- **Risk Management**: Implements 5% stop-loss on every trade
+- **Position Sizing**: Optimized for $200 account with 25% max position size
+- **Sector Focus**: Cannabis sector has been your best performer (ACB: +402%)
+
+**Run advanced trading bot:**
+```bash
+# Default hybrid strategy
+python machine_learning/advanced_trading_bot.py
+
+# Specific strategies
+python machine_learning/advanced_trading_bot.py --strategy proven_winners
+python machine_learning/advanced_trading_bot.py --strategy real_time
+python machine_learning/advanced_trading_bot.py --strategy hybrid
+
+# Custom account settings
+python machine_learning/advanced_trading_bot.py --account-size 300 --max-position 0.20
+```
+
+**Get recommendations:**
+```bash
+python machine_learning/trading_recommendations.py
+```
+
+**Analyze trading history:**
+```bash
+python machine_learning/trading_analysis.py
+```
 
 ## ⚠️ Important Notes
 
@@ -158,14 +227,6 @@ microcap_trader/
    ```bash
    python enhanced_microcap_trader.py add --symbol OCGN --shares 100 --price 1.08
    ```
-
-## 📞 Support
-
-For issues or questions:
-- Check the daily reports for insights
-- Verify API keys are correctly set
-- Ensure all dependencies are installed
-- Review error messages for troubleshooting
 
 ---
 

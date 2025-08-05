@@ -9,6 +9,7 @@
 portfolio.csv
 candidates.csv
 daily_report.md
+machine_learning/trading_history.csv
 
 # Python cache
 __pycache__/

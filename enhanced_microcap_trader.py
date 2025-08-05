@@ -245,12 +245,19 @@ class EnhancedMicrocapTrader:
             
             top_candidates = candidates_df.head(5)
             for _, row in top_candidates.iterrows():
+                # Handle zero percentage changes
+                pct_1d = row['pct_change_1d']
+                pct_5d = row['pct_change_5d']
+                
+                pct_1d_str = f"{pct_1d:+.2f}%" if pct_1d != 0 else "+0.00%"
+                pct_5d_str = f"{pct_5d:+.2f}%" if pct_5d != 0 else "+0.00%"
+                
                 candidates_table.add_row(
-                    row['symbol'],
+                    str(row['symbol']),
                     f"${row['price']:.2f}",
                     f"${row['market_cap']:.2f}B",
-                    f"{row['pct_change_1d']:+.2f}%",
-                    f"{row['pct_change_5d']:+.2f}%",
+                    pct_1d_str,
+                    pct_5d_str,
                     f"{row['avg_volume']:,}"
                 )
             
@@ -417,8 +424,10 @@ class EnhancedMicrocapTrader:
         """Show current candidates."""
         try:
             candidates_df = pd.read_csv(self.candidates_file)
+            portfolio_df = pd.read_csv(self.portfolio_file)
+            
             if not candidates_df.empty:
-                self._show_summary(pd.DataFrame(), candidates_df)
+                self._show_summary(portfolio_df, candidates_df)
             else:
                 console.print("No candidates available. Run daily update first.", style="yellow")
         except Exception as e:
