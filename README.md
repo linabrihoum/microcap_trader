@@ -1,6 +1,7 @@
 # Enhanced Microcap Trading System
 
-A production-ready microcap stock trading system with intelligent scoring, position sizing, and risk management.
+A production-ready microcap stock trading system with intelligent scoring, position sizing, and risk management. Inspired by [
+LuckyOne7777 ChatGPT Micro Cap Experiment](https://github.com/LuckyOne7777/ChatGPT-Micro-Cap-Experiment).
 
 ## 🚀 Features
 
