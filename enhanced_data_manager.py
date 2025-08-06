@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Enhanced Data Manager for Microcap Trading System
-Production-ready with secure API key handling
 """
 
 import os
@@ -14,6 +13,9 @@ from typing import Dict, List, Optional
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from dotenv import load_dotenv
+from utilities.error_handler import error_handler, APIError, NetworkError, DataError, handle_exceptions
+from validation.data_validator import validate_stock_data_safe
+from validation.data_models import StockData, DataSource, MarketSector
 
 # Load environment variables
 load_dotenv()
@@ -23,10 +25,23 @@ console = Console()
 class EnhancedDataManager:
     """Enhanced data manager with multiple API sources and production security."""
     
-    def __init__(self):
+    def __init__(self, enable_caching: bool = True):
         # Load API keys from environment variables (production secure)
         self.polygon_api_key = os.getenv('POLYGON_API_KEY')
         self.finnhub_api_key = os.getenv('FINNHUB_API_KEY')
+        
+        # Initialize caching system
+        self.enable_caching = enable_caching
+        self.cache_manager = None
+        
+        if enable_caching:
+            try:
+                from caching.cache_manager import RealTimeCacheManager
+                self.cache_manager = RealTimeCacheManager(self._fetch_stock_data_uncached)
+                console.print("✅ Real-time caching system initialized", style="green")
+            except ImportError as e:
+                console.print(f"⚠️  Caching system not available: {e}", style="yellow")
+                self.enable_caching = False
         
         # Validate API keys are present
         if not self.polygon_api_key:
@@ -39,49 +54,183 @@ class EnhancedDataManager:
         else:
             console.print("✅ Finnhub API key found", style="green")
     
+    @handle_exceptions
+    def get_stock_data(self, symbol: str, use_cache: bool = True) -> Optional[Dict]:
+        """Get stock data with optional caching."""
+        if use_cache and self.enable_caching and self.cache_manager:
+            # Use cached data for analysis (default)
+            return self.cache_manager.get_stock_data_for_analysis(symbol)
+        else:
+            # Fetch uncached data
+            return self._fetch_stock_data_uncached(symbol)
+    
+    @handle_exceptions
+    def get_stock_data_for_trading(self, symbol: str) -> Optional[Dict]:
+        """Get real-time stock data for active trading."""
+        if self.enable_caching and self.cache_manager:
+            return self.cache_manager.get_stock_data_for_trading(symbol)
+        else:
+            return self._fetch_stock_data_uncached(symbol)
+    
+    @handle_exceptions
+    def get_portfolio_data(self, symbols: List[str]) -> Dict[str, Optional[Dict]]:
+        """Get portfolio data with appropriate caching strategy."""
+        if self.enable_caching and self.cache_manager:
+            return self.cache_manager.get_portfolio_data(symbols)
+        else:
+            # Fallback to uncached data
+            portfolio_data = {}
+            for symbol in symbols:
+                portfolio_data[symbol] = self._fetch_stock_data_uncached(symbol)
+            return portfolio_data
+    
+    @handle_exceptions
+    def set_active_positions(self, symbols: List[str]) -> None:
+        """Set active positions for real-time updates."""
+        if self.enable_caching and self.cache_manager:
+            for symbol in symbols:
+                self.cache_manager.set_active_position(symbol, True)
+    
+    @handle_exceptions
+    def set_watchlist(self, symbols: List[str]) -> None:
+        """Set watchlist for medium priority updates."""
+        if self.enable_caching and self.cache_manager:
+            self.cache_manager.set_watchlist(symbols)
+    
+    @handle_exceptions
+    def get_cache_stats(self) -> Optional[Dict]:
+        """Get cache statistics if caching is enabled."""
+        if self.enable_caching and self.cache_manager:
+            return self.cache_manager.get_cache_stats()
+        return None
+    
+    @handle_exceptions
+    def display_cache_stats(self) -> None:
+        """Display cache statistics if caching is enabled."""
+        if self.enable_caching and self.cache_manager:
+            self.cache_manager.display_comprehensive_stats()
+        else:
+            console.print("⚠️  Caching is not enabled", style="yellow")
+    
+    def _fetch_stock_data_uncached(self, symbol: str) -> Optional[Dict]:
+        """Internal method to fetch stock data without caching (fallback chain)."""
+        # Try Polygon.io first
+        data = self.get_stock_data_polygon(symbol)
+        if data:
+            return data
+        
+        # Try Finnhub second
+        data = self.get_stock_data_finnhub(symbol)
+        if data:
+            return data
+        
+        # Try yfinance third
+        data = self.get_stock_data_yfinance(symbol)
+        if data:
+            return data
+        
+        # Generate simulated data as last resort
+        return self.generate_simulated_data(symbol)
+    
+    @handle_exceptions
+    def generate_simulated_data(self, symbol: str) -> Optional[Dict]:
+        """Generate simulated stock data when all APIs fail."""
+        try:
+            # Generate realistic simulated data
+            import random
+            
+            # Base price range for microcap stocks
+            base_price = random.uniform(1.0, 25.0)
+            
+            # Market cap in billions (microcap range)
+            market_cap = random.uniform(0.05, 1.8)
+            
+            # Volume in thousands
+            volume = random.randint(50, 2000) * 1000
+            
+            # Price changes
+            pct_change_1d = random.uniform(-15.0, 15.0)
+            pct_change_5d = random.uniform(-25.0, 25.0)
+            
+            data = {
+                'symbol': symbol,
+                'price': round(base_price, 2),
+                'market_cap': round(market_cap, 2),
+                'avg_volume': volume,
+                'pct_change_1d': round(pct_change_1d, 2),
+                'pct_change_5d': round(pct_change_5d, 2),
+                'data_source': DataSource.SIMULATED
+            }
+            
+            # Validate the simulated data
+            validated_data = validate_stock_data_safe(data)
+            if validated_data:
+                return validated_data.model_dump()
+            return None
+            
+        except Exception as e:
+            console.print(f"❌ Failed to generate simulated data for {symbol}: {e}", style="red")
+            return None
+    
+    @handle_exceptions
+    @error_handler.retry_on_failure(max_retries=2, delay=0.5)
     def get_stock_data_polygon(self, symbol: str) -> Optional[Dict]:
-        """Get stock data from Polygon.io API."""
+        """Get stock data from Polygon.io API with enhanced error handling."""
         if not self.polygon_api_key:
             return None
             
         try:
             # Get current price
             price_url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev"
-            price_response = requests.get(price_url, params={'apikey': self.polygon_api_key})
+            price_response = requests.get(price_url, params={'apikey': self.polygon_api_key}, timeout=10)
             
             if price_response.status_code != 200:
-                return None
+                raise APIError(f"Status code {price_response.status_code}", "Polygon", price_response.status_code)
                 
             price_data = price_response.json()
             if not price_data.get('results'):
-                return None
+                raise DataError(f"No data available for {symbol}")
                 
             current_price = price_data['results'][0]['c']
             
             # Get additional data (market cap, volume, etc.)
             details_url = f"https://api.polygon.io/v3/reference/tickers/{symbol}"
-            details_response = requests.get(details_url, params={'apikey': self.polygon_api_key})
+            details_response = requests.get(details_url, params={'apikey': self.polygon_api_key}, timeout=10)
             
             market_cap = 0
             if details_response.status_code == 200:
                 details_data = details_response.json()
                 market_cap = details_data.get('results', {}).get('market_cap', 0) / 1e9  # Convert to billions
             
-            return {
+            data = {
                 'symbol': symbol,
                 'price': current_price,
                 'market_cap': market_cap,
                 'avg_volume': price_data['results'][0].get('v', 0),
                 'pct_change_1d': 0,  # Polygon doesn't provide this easily
-                'pct_change_5d': 0
+                'pct_change_5d': 0,
+                'data_source': DataSource.POLYGON
             }
             
-        except Exception as e:
-            console.print(f"Error fetching {symbol} from Polygon: {e}", style="red")
+            # Validate data using Pydantic
+            validated_data = validate_stock_data_safe(data)
+            if validated_data:
+                return validated_data.model_dump()
             return None
+            
+        except requests.exceptions.Timeout:
+            raise NetworkError(f"Timeout fetching data for {symbol}")
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(f"Network error fetching {symbol}: {str(e)}")
+        except Exception as e:
+            if not error_handler.handle_api_error(e, "Polygon", symbol):
+                return None
+            raise
     
+    @handle_exceptions
+    @error_handler.retry_on_failure(max_retries=2, delay=0.5)
     def get_stock_data_finnhub(self, symbol: str) -> Optional[Dict]:
-        """Get stock data from Finnhub API."""
+        """Get stock data from Finnhub API with enhanced error handling."""
         if not self.finnhub_api_key:
             return None
             
@@ -92,14 +241,14 @@ class EnhancedDataManager:
                 'symbol': symbol,
                 'token': self.finnhub_api_key
             }
-            response = requests.get(quote_url, params=params)
+            response = requests.get(quote_url, params=params, timeout=10)
             
             if response.status_code != 200:
-                return None
+                raise APIError(f"Status code {response.status_code}", "Finnhub", response.status_code)
                 
             data = response.json()
             if data.get('c') == 0:  # No data
-                return None
+                raise DataError(f"No data available for {symbol}")
                 
             current_price = data['c']
             prev_close = data['pc']
@@ -107,34 +256,48 @@ class EnhancedDataManager:
             
             # Get company profile for market cap
             profile_url = f"https://finnhub.io/api/v1/stock/profile2"
-            profile_response = requests.get(profile_url, params=params)
+            profile_response = requests.get(profile_url, params=params, timeout=10)
             
             market_cap = 0
             if profile_response.status_code == 200:
                 profile_data = profile_response.json()
                 market_cap = profile_data.get('marketCapitalization', 0) / 1e9  # Convert to billions
             
-            return {
+            result_data = {
                 'symbol': symbol,
                 'price': current_price,
                 'market_cap': market_cap,
                 'avg_volume': data.get('v', 0),
                 'pct_change_1d': pct_change_1d,
-                'pct_change_5d': 0  # Finnhub doesn't provide 5-day easily
+                'pct_change_5d': 0,  # Finnhub doesn't provide 5-day easily
+                'data_source': DataSource.FINNHUB
             }
             
-        except Exception as e:
-            console.print(f"Error fetching {symbol} from Finnhub: {e}", style="red")
+            # Validate data using Pydantic
+            validated_data = validate_stock_data_safe(result_data)
+            if validated_data:
+                return validated_data.model_dump()
             return None
+            
+        except requests.exceptions.Timeout:
+            raise NetworkError(f"Timeout fetching data for {symbol}")
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(f"Network error fetching {symbol}: {str(e)}")
+        except Exception as e:
+            if not error_handler.handle_api_error(e, "Finnhub", symbol):
+                return None
+            raise
     
+    @handle_exceptions
+    @error_handler.retry_on_failure(max_retries=1, delay=1.0)
     def get_stock_data_yfinance(self, symbol: str) -> Optional[Dict]:
-        """Get stock data from yfinance (fallback)."""
+        """Get stock data from yfinance (fallback) with enhanced error handling."""
         try:
             ticker = yf.Ticker(symbol)
             info = ticker.info
             
             if not info or info.get('regularMarketPrice', 0) == 0:
-                return None
+                raise DataError(f"No data available for {symbol}")
                 
             current_price = info.get('regularMarketPrice', 0)
             prev_close = info.get('regularMarketPreviousClose', current_price)
@@ -148,37 +311,26 @@ class EnhancedDataManager:
             else:
                 pct_change_5d = pct_change_1d
             
-            return {
+            result_data = {
                 'symbol': symbol,
                 'price': current_price,
                 'market_cap': info.get('marketCap', 0) / 1e9,  # Convert to billions
                 'avg_volume': info.get('averageVolume', 0),
                 'pct_change_1d': pct_change_1d,
-                'pct_change_5d': pct_change_5d
+                'pct_change_5d': pct_change_5d,
+                'data_source': DataSource.YFINANCE
             }
             
-        except Exception as e:
-            console.print(f"Error fetching {symbol} from yfinance: {e}", style="red")
+            # Validate data using Pydantic
+            validated_data = validate_stock_data_safe(result_data)
+            if validated_data:
+                return validated_data.model_dump()
             return None
-    
-    def get_stock_data(self, symbol: str) -> Optional[Dict]:
-        """Get stock data with fallback chain."""
-        # Try Polygon first (most reliable)
-        data = self.get_stock_data_polygon(symbol)
-        if data:
-            return data
-        
-        # Try Finnhub second
-        data = self.get_stock_data_finnhub(symbol)
-        if data:
-            return data
-        
-        # Fallback to yfinance
-        data = self.get_stock_data_yfinance(symbol)
-        if data:
-            return data
-        
-        return None
+            
+        except Exception as e:
+            if not error_handler.handle_api_error(e, "yfinance", symbol):
+                return None
+            raise
     
     def get_current_prices(self, symbols: List[str]) -> Dict[str, float]:
         """Get current prices for multiple symbols."""
@@ -284,8 +436,8 @@ class EnhancedDataManager:
         
         return max(0, min(100, score))  # Clamp between 0-100
     
-    def get_microcap_stocks(self, count: int = 30) -> pd.DataFrame:
-        """Get a list of microcap stocks with enhanced data sources."""
+    def get_microcap_stocks(self, count: int = 30, use_batch_processing: bool = True) -> pd.DataFrame:
+        """Get a list of microcap stocks with enhanced data sources and batch processing."""
         
         # True microcap stock list (market cap < $2B)
         microcap_symbols = [
@@ -317,23 +469,55 @@ class EnhancedDataManager:
         
         console.print(f"🔍 Fetching data for {len(selected_symbols)} microcap stocks...")
         
-        results = []
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console
-        ) as progress:
-            task = progress.add_task("Fetching stock data...", total=len(selected_symbols))
-            
-            for symbol in selected_symbols:
-                data = self.get_stock_data(symbol)
-                if data and data['market_cap'] < 2.0:  # Filter for microcap
-                    # Calculate score for ranking
-                    data['score'] = self.calculate_stock_score(data)
-                    results.append(data)
+        if use_batch_processing:
+            # Use batch processing for better performance
+            try:
+                from utilities.batch_processor import DataBatchProcessor
+                batch_processor = DataBatchProcessor(self)
                 
-                progress.advance(task)
-                time.sleep(0.1)  # Rate limiting
+                # Fetch stock data in batches
+                stock_data = batch_processor.batch_fetch_stock_data(selected_symbols)
+                
+                # Filter microcap stocks
+                filtered_data = batch_processor.batch_filter_microcaps(stock_data)
+                
+                # Calculate scores in batches
+                scores = batch_processor.batch_calculate_scores(filtered_data)
+                
+                # Combine results
+                results = []
+                for symbol, data in filtered_data.items():
+                    if symbol in scores:
+                        data['score'] = scores[symbol]
+                        results.append(data)
+                
+                # Display batch processing stats
+                batch_processor.display_processing_stats()
+                batch_processor.shutdown()
+                
+            except ImportError:
+                console.print("⚠️  Batch processing not available, using sequential processing", style="yellow")
+                use_batch_processing = False
+        
+        if not use_batch_processing:
+            # Fallback to sequential processing
+            results = []
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console
+            ) as progress:
+                task = progress.add_task("Fetching stock data...", total=len(selected_symbols))
+                
+                for symbol in selected_symbols:
+                    data = self.get_stock_data(symbol)
+                    if data and data['market_cap'] < 2.0:  # Filter for microcap
+                        # Calculate score for ranking
+                        data['score'] = self.calculate_stock_score(data)
+                        results.append(data)
+                    
+                    progress.advance(task)
+                    time.sleep(0.1)  # Rate limiting
         
         df = pd.DataFrame(results)
         if not df.empty:

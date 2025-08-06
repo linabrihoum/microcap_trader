@@ -29,9 +29,9 @@ class EnhancedMicrocapTrader:
     
     def __init__(self):
         self.data_manager = EnhancedDataManager()
-        self.portfolio_file = "portfolio.csv"
-        self.candidates_file = "candidates.csv"
-        self.report_file = "daily_report.md"
+        self.portfolio_file = "data/portfolio.csv"
+        self.candidates_file = "data/candidates.csv"
+        self.report_file = "data/daily_report.md"
         
         # Ensure portfolio file exists
         self._ensure_portfolio_file()

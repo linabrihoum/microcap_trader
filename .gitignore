@@ -10,6 +10,12 @@ portfolio.csv
 candidates.csv
 daily_report.md
 machine_learning/trading_history.csv
+daily_research/daily_candidates_*.csv
+daily_research/daily_candidates_*.json
+training_results*.csv
+training_results*.json
+daily_summary*.md
+portfolio_value_chart*.png
 
 # Python cache
 __pycache__/
