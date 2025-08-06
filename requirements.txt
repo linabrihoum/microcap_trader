@@ -14,6 +14,9 @@ rich>=12.0.0
 # Environment variable management
 python-dotenv>=0.19.0
 
+# Data validation and type checking
+pydantic>=2.0.0
+
 # These are optional - system works without them
 # polygon-api-client>=1.0.0  # Uncomment if using Polygon.io
 # finnhub-python>=2.4.0      # Uncomment if using Finnhub 
