@@ -1,0 +1,150 @@
+name: Trading Automation Pipeline
+
+on:
+  schedule:
+    # Daily research at 11 AM EST (4 PM UTC)
+    - cron: '0 16 * * 1-5'
+    # Weekly research every Friday at 4 PM EST (9 PM UTC)
+    - cron: '0 21 * * 5'
+    # ML training every Sunday at 2 AM EST (7 AM UTC)
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'daily_research'
+        type: choice
+        options:
+          - daily_research
+          - weekly_research
+          - ml_training
+          - full_pipeline
+
+jobs:
+  daily-research:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 16 * * 1-5' || github.event.inputs.action == 'daily_research' || github.event.inputs.action == 'full_pipeline'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create daily research directories
+      run: |
+        mkdir -p daily_research
+        mkdir -p weekly_research/summaries
+    
+    - name: Run daily research
+      run: |
+        python daily_research_generator.py
+      env:
+        POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        FINHUB_API_KEY: ${{ secrets.FINHUB_API_KEY }}
+    
+    - name: Commit daily research results
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add daily_research/
+        git commit -m "🤖 Daily research update - $(date +'%Y-%m-%d')" || echo "No changes to commit"
+        git push
+
+  weekly-research:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 21 * * 5' || github.event.inputs.action == 'weekly_research' || github.event.inputs.action == 'full_pipeline'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Aggregate weekly daily research
+      run: |
+        python weekly_aggregator.py
+    
+    - name: Run weekly research
+      run: |
+        cd weekly_research
+        python weekly_research_generator.py
+    
+    - name: Generate ML insights
+      run: |
+        cd weekly_research
+        python ml_insights_generator.py
+    
+    - name: Update weekly PnL chart
+      run: |
+        cd machine_learning
+        python update_weekly_chart.py
+    
+    - name: Commit weekly research results
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add weekly_research/
+        git add machine_learning/weekly_pnl_chart.png
+        git commit -m "📊 Weekly research update - $(date +'%Y-%m-%d')" || echo "No changes to commit"
+        git push
+
+  ml-training:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' && github.event.schedule == '0 7 * * 0' || github.event.inputs.action == 'ml_training' || github.event.inputs.action == 'full_pipeline'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Run ML training
+      run: |
+        cd machine_learning
+        python advanced_trading_bot.py --strategy hybrid --training-mode
+    
+    - name: Update ML model
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add machine_learning/
+        git commit -m "🤖 ML model update - $(date +'%Y-%m-%d')" || echo "No changes to commit"
+        git push
+
+  notify-completion:
+    runs-on: ubuntu-latest
+    needs: [daily-research, weekly-research, ml-training]
+    if: always()
+    
+    steps:
+    - name: Notify completion
+      run: |
+        echo "✅ Trading automation pipeline completed"
+        echo "📅 Date: $(date)"
+        echo "🔄 Jobs completed: ${{ needs.daily-research.result }}, ${{ needs.weekly-research.result }}, ${{ needs.ml-training.result }}" 
