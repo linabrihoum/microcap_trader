@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import our enhanced trader
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from enhanced_microcap_trader import EnhancedMicrocapTrader
 
 console = Console()

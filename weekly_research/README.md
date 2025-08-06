@@ -13,20 +13,13 @@ Where:
 
 ## 🚀 How to Generate Reports
 
-### Option 1: Python Script (Recommended)
+### Manual Execution
 ```bash
 python weekly_research_generator.py
 ```
 
-### Option 2: Batch File (Windows)
-```bash
-run_weekly_report.bat
-```
-
-### Option 3: PowerShell Script (Windows)
-```powershell
-.\run_weekly_report.ps1
-```
+### Automated Execution (GitHub Actions)
+Reports are automatically generated every Friday at 4 PM EST via GitHub Actions.
 
 ## 📊 Report Contents
 
@@ -73,8 +66,9 @@ Each weekly report includes:
 
 ## 🔄 Weekly Schedule
 
-Reports should be generated:
-- **Weekly**: Every Friday or Monday
+Reports are automatically generated:
+- **Weekly**: Every Friday at 4 PM EST via GitHub Actions
+- **Manual**: Can be run anytime with `python weekly_research_generator.py`
 - **After Portfolio Updates**: When new positions are added
 - **Before Trading Decisions**: To inform next week's strategy
 
