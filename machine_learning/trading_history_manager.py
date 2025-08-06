@@ -269,11 +269,11 @@ def main():
     elif args.command == "update":
         # Update from current portfolio
         try:
-            portfolio_df = pd.read_csv("portfolio.csv")
+            portfolio_df = pd.read_csv("data/portfolio.csv")
             manager.update_open_positions(portfolio_df)
-            console.print("✅ Updated open positions from portfolio.csv")
+            console.print("✅ Updated open positions from data/portfolio.csv")
         except FileNotFoundError:
-            console.print("❌ portfolio.csv not found")
+            console.print("❌ data/portfolio.csv not found")
 
 if __name__ == "__main__":
     main() 

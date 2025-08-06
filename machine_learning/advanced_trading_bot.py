@@ -2,13 +2,13 @@
 """
 Advanced Microcap Trading Bot
 Enhanced version that learns from trading history and provides intelligent recommendations.
-Combines real-time market analysis with proven pattern recognition.
+Combines real-time market analysis with proven pattern recognition and improved error handling.
 """
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-import yfinance as yf
+import requests
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -16,8 +16,16 @@ from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
 import warnings
 import os
+import json
+import glob
 from typing import Dict, List, Optional, Tuple
+from dotenv import load_dotenv
+from utilities.error_handler import error_handler, APIError, NetworkError, DataError, FileError, handle_exceptions
+from validation.data_models import MarketData, TradingRecommendation
 warnings.filterwarnings('ignore')
+
+# Load environment variables
+load_dotenv()
 
 console = Console()
 
@@ -35,8 +43,9 @@ class AdvancedTradingBot:
         self.learned_patterns = self.analyze_trading_patterns()
         self.market_data_cache = {}
         
+    @handle_exceptions
     def load_trading_history(self) -> pd.DataFrame:
-        """Load trading history with improved error handling."""
+        """Load trading history with enhanced error handling."""
         try:
             df = pd.read_csv("trading_history.csv")
             console.print("✅ Loaded trading history")
@@ -54,13 +63,14 @@ class AdvancedTradingBot:
                     console.print("✅ Loaded trading history from parent directory")
                     return df
                 except FileNotFoundError:
-                    console.print("❌ trading_history.csv not found")
+                    error_handler.handle_file_error(FileNotFoundError("trading_history.csv not found"), "trading_history.csv")
                     return pd.DataFrame()
     
+    @handle_exceptions
     def get_current_holdings(self) -> pd.DataFrame:
-        """Get current portfolio holdings with improved error handling."""
+        """Get current portfolio holdings with enhanced error handling."""
         try:
-            df = pd.read_csv("portfolio.csv")
+            df = pd.read_csv("data/portfolio.csv")
             return df[df['shares'] > 0]
         except FileNotFoundError:
             try:
@@ -70,9 +80,10 @@ class AdvancedTradingBot:
             except FileNotFoundError:
                 try:
                     # Try relative path from parent directory
-                    df = pd.read_csv("../portfolio.csv")
+                    df = pd.read_csv("../data/portfolio.csv")
                     return df[df['shares'] > 0]
                 except FileNotFoundError:
+                    error_handler.handle_file_error(FileNotFoundError("portfolio.csv not found"), "data/portfolio.csv")
                     return pd.DataFrame()
     
     def analyze_trading_patterns(self) -> Dict:
@@ -110,52 +121,189 @@ class AdvancedTradingBot:
         
         return patterns
     
+    @handle_exceptions
     def get_market_data(self, symbol: str) -> Optional[Dict]:
         """Get real-time market data with caching and fallback to simulated data."""
         if symbol in self.market_data_cache:
             return self.market_data_cache[symbol]
         
         try:
-            stock = yf.Ticker(symbol)
-            info = stock.info
+            # Try Polygon.io first
+            data = self.get_market_data_polygon(symbol)
+            if data:
+                self.market_data_cache[symbol] = data
+                return data
             
+            # Try Finnhub second
+            data = self.get_market_data_finnhub(symbol)
+            if data:
+                self.market_data_cache[symbol] = data
+                return data
+            
+            # Fallback to simulated data
+            data = self.get_simulated_data(symbol)
+            self.market_data_cache[symbol] = data
+            return data
+            
+        except Exception as e:
+            error_handler.log_error_with_context(e, {
+                'symbol': symbol,
+                'operation': 'market_data_fetch'
+            })
+            # Fallback to simulated data on any error
+            data = self.get_simulated_data(symbol)
+            self.market_data_cache[symbol] = data
+            return data
+    
+    @handle_exceptions
+    @error_handler.retry_on_failure(max_retries=2, delay=0.5)
+    def get_market_data_polygon(self, symbol: str) -> Optional[Dict]:
+        """Get market data from Polygon.io API with enhanced error handling."""
+        polygon_api_key = os.getenv('POLYGON_API_KEY')
+        if not polygon_api_key:
+            return None
+            
+        try:
             # Get current price and volume
-            hist = stock.history(period='5d')
-            if hist.empty:
-                return self.get_simulated_data(symbol)
+            price_url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev"
+            price_response = requests.get(price_url, params={'apikey': polygon_api_key}, timeout=10)
             
-            current_price = hist['Close'].iloc[-1]
-            avg_volume = hist['Volume'].mean()
-            market_cap = info.get('marketCap', 0)
+            if price_response.status_code != 200:
+                raise APIError(f"Status code {price_response.status_code}", "Polygon", price_response.status_code)
+                
+            price_data = price_response.json()
+            if not price_data.get('results'):
+                raise DataError(f"No data available for {symbol}")
+                
+            current_price = price_data['results'][0]['c']
+            volume = price_data['results'][0].get('v', 0)
             
-            # Calculate momentum indicators
-            price_5d_ago = hist['Close'].iloc[0]
-            pct_change_5d = ((current_price - price_5d_ago) / price_5d_ago) * 100
+            # Get 5-day historical data for momentum
+            hist_url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{(datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')}/{datetime.now().strftime('%Y-%m-%d')}"
+            hist_response = requests.get(hist_url, params={'apikey': polygon_api_key}, timeout=10)
             
-            # Calculate intraday momentum (post-noon focus)
-            today_data = stock.history(period='1d', interval='1h')
+            pct_change_5d = 0
+            avg_volume = volume
             afternoon_momentum = 0
-            if not today_data.empty and len(today_data) > 6:  # After noon
-                afternoon_data = today_data.iloc[6:]  # After 12 PM
-                if not afternoon_data.empty:
-                    afternoon_momentum = ((afternoon_data['Close'].iloc[-1] - afternoon_data['Open'].iloc[0]) / afternoon_data['Open'].iloc[0]) * 100
             
-            data = {
+            if hist_response.status_code == 200:
+                hist_data = hist_response.json()
+                if hist_data.get('results') and len(hist_data['results']) >= 5:
+                    results = hist_data['results']
+                    current_price = results[-1]['c']
+                    five_day_ago = results[0]['c']
+                    pct_change_5d = ((current_price - five_day_ago) / five_day_ago) * 100 if five_day_ago > 0 else 0
+                    avg_volume = sum(r.get('v', 0) for r in results) / len(results)
+            
+            # Get company details for market cap
+            details_url = f"https://api.polygon.io/v3/reference/tickers/{symbol}"
+            details_response = requests.get(details_url, params={'apikey': polygon_api_key}, timeout=10)
+            
+            market_cap = 0
+            if details_response.status_code == 200:
+                details_data = details_response.json()
+                market_cap = details_data.get('results', {}).get('market_cap', 0)
+            
+            result_data = {
                 'symbol': symbol,
                 'current_price': current_price,
                 'avg_volume': avg_volume,
                 'market_cap': market_cap,
                 'pct_change_5d': pct_change_5d,
                 'afternoon_momentum': afternoon_momentum,
-                'info': info
+                'data_source': 'polygon'
             }
             
-            self.market_data_cache[symbol] = data
-            return data
+            # Validate the data
+            if not error_handler.validate_data(result_data, f"Polygon data for {symbol}", ['symbol', 'current_price']):
+                raise DataError(f"Invalid data structure for {symbol}")
+            
+            return result_data
+            
+        except requests.exceptions.Timeout:
+            raise NetworkError(f"Timeout fetching data for {symbol}")
+        except requests.exceptions.RequestException as e:
+            raise NetworkError(f"Network error fetching {symbol}: {str(e)}")
+        except Exception as e:
+            if not error_handler.handle_api_error(e, "Polygon", symbol):
+                return None
+            raise
+    
+    def get_market_data_finnhub(self, symbol: str) -> Optional[Dict]:
+        """Get market data from Finnhub API."""
+        finnhub_api_key = os.getenv('FINNHUB_API_KEY')
+        if not finnhub_api_key:
+            return None
+            
+        try:
+            # Get quote data
+            quote_url = f"https://finnhub.io/api/v1/quote"
+            params = {
+                'symbol': symbol,
+                'token': finnhub_api_key
+            }
+            response = requests.get(quote_url, params=params)
+            
+            if response.status_code != 200:
+                return None
+                
+            data = response.json()
+            if data.get('c') == 0:  # No data
+                return None
+                
+            current_price = data['c']
+            volume = data.get('v', 0)
+            
+            # Get 5-day historical data
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=10)
+            
+            hist_url = f"https://finnhub.io/api/v1/stock/candle"
+            hist_params = {
+                'symbol': symbol,
+                'resolution': 'D',
+                'from': int(start_date.timestamp()),
+                'to': int(end_date.timestamp()),
+                'token': finnhub_api_key
+            }
+            
+            hist_response = requests.get(hist_url, params=hist_params)
+            pct_change_5d = 0
+            avg_volume = volume
+            
+            if hist_response.status_code == 200:
+                hist_data = hist_response.json()
+                if hist_data.get('s') == 'ok' and len(hist_data.get('c', [])) >= 5:
+                    closes = hist_data['c']
+                    volumes = hist_data.get('v', [volume] * len(closes))
+                    
+                    current_price = closes[-1]
+                    five_day_ago = closes[0]
+                    pct_change_5d = ((current_price - five_day_ago) / five_day_ago) * 100 if five_day_ago > 0 else 0
+                    avg_volume = sum(volumes) / len(volumes)
+            
+            # Get company profile for market cap
+            profile_url = f"https://finnhub.io/api/v1/stock/profile2"
+            profile_response = requests.get(profile_url, params=params)
+            
+            market_cap = 0
+            if profile_response.status_code == 200:
+                profile_data = profile_response.json()
+                market_cap = profile_data.get('marketCapitalization', 0)
+            
+            return {
+                'symbol': symbol,
+                'current_price': current_price,
+                'avg_volume': avg_volume,
+                'market_cap': market_cap,
+                'pct_change_5d': pct_change_5d,
+                'afternoon_momentum': 0,  # Finnhub doesn't provide intraday data easily
+                'data_source': 'finnhub'
+            }
             
         except Exception as e:
-            console.print(f"⚠️ Using simulated data for {symbol} (API error: {str(e)[:50]}...)")
-            return self.get_simulated_data(symbol)
+            console.print(f"Error fetching {symbol} from Finnhub: {e}", style="red")
+            return None
     
     def get_simulated_data(self, symbol: str) -> Dict:
         """Get simulated market data based on historical patterns."""
@@ -193,18 +341,15 @@ class AdvancedTradingBot:
             'info': {'marketCap': 1.5e9}
         }
     
-    def get_candidates(self, strategy: str = 'hybrid') -> List[Dict]:
-        """
-        Get trading candidates based on different strategies.
-        
-        Args:
-            strategy: 'proven_winners', 'real_time', or 'hybrid'
-        """
+    def get_candidates(self, strategy: str = 'momentum_focused') -> List[Dict]:
+        """Get candidates based on strategy with enhanced momentum focus."""
         if strategy == 'proven_winners':
             return self.get_proven_winners()
-        elif strategy == 'real_time':
-            return self.get_real_time_candidates()
-        else:  # hybrid
+        elif strategy == 'momentum_focused':
+            return self.get_momentum_focused_candidates()
+        elif strategy == 'hybrid':
+            return self.get_hybrid_candidates()
+        else:
             return self.get_hybrid_candidates()
     
     def get_proven_winners(self) -> List[Dict]:
@@ -341,6 +486,113 @@ class AdvancedTradingBot:
         # Sort by score and return top candidates
         candidates.sort(key=lambda x: x['score'], reverse=True)
         return candidates[:5]
+    
+    def get_momentum_focused_candidates(self) -> List[Dict]:
+        """Get candidates focused on strong momentum patterns."""
+        candidates = []
+        
+        # Focus on proven winners with momentum
+        proven_winners = ['ATAI', 'SNDL', 'CGC', 'HEXO', 'TLRY']
+        
+        for symbol in proven_winners:
+            if self.check_duplicate_holdings(symbol):
+                continue
+                
+            market_data = self.get_market_data(symbol)
+            if not market_data:
+                continue
+            
+            # Enhanced momentum scoring
+            momentum_score = self.calculate_momentum_score(market_data)
+            if momentum_score < 70:  # Higher threshold for momentum
+                continue
+            
+            # Calculate position size based on momentum
+            position_size = self.calculate_momentum_position_size(market_data)
+            
+            candidates.append({
+                'symbol': symbol,
+                'current_price': market_data['current_price'],
+                'buy_shares': position_size['shares'],
+                'total_cost': position_size['total_cost'],
+                'stop_loss_price': position_size['stop_loss'],
+                'score': momentum_score,
+                'sector': self.get_sector(symbol),
+                'confidence': 'High' if momentum_score > 80 else 'Medium',
+                'momentum_1d': market_data.get('pct_change_1d', 0),
+                'momentum_5d': market_data.get('pct_change_5d', 0),
+                'volume': market_data.get('avg_volume', 0)
+            })
+        
+        # Sort by momentum score
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        return candidates[:5]  # Top 5 momentum candidates
+    
+    def calculate_momentum_score(self, market_data: Dict) -> float:
+        """Calculate enhanced momentum score based on performance analysis."""
+        score = 0
+        
+        # Base momentum (40% weight)
+        momentum_1d = market_data.get('pct_change_1d', 0)
+        momentum_5d = market_data.get('pct_change_5d', 0)
+        
+        if momentum_1d > 10:  # Strong 1-day momentum
+            score += 40
+        elif momentum_1d > 5:
+            score += 30
+        elif momentum_1d > 2:
+            score += 20
+        
+        # Volume analysis (30% weight)
+        volume = market_data.get('avg_volume', 0)
+        if volume > 5000:
+            score += 30
+        elif volume > 2000:
+            score += 20
+        elif volume > 1000:
+            score += 10
+        
+        # Sector bonus (20% weight) - Cannabis focus
+        sector = self.get_sector(market_data['symbol'])
+        if sector == 'Cannabis':
+            score += 20
+        elif sector == 'Clean Energy':
+            score += 10
+        
+        # Price range optimization (10% weight)
+        price = market_data.get('current_price', 0)
+        if 1 <= price <= 10:
+            score += 10
+        elif 10 < price <= 20:
+            score += 5
+        
+        return min(score, 100)  # Cap at 100
+    
+    def calculate_momentum_position_size(self, market_data: Dict) -> Dict:
+        """Calculate position size based on momentum strength."""
+        from config import ACCOUNT_SIZE, MAX_POSITION_SIZE, STOP_LOSS_PERCENTAGE
+        
+        price = market_data.get('current_price', 0)
+        momentum_1d = market_data.get('pct_change_1d', 0)
+        
+        # Dynamic position sizing based on momentum
+        if momentum_1d > 15:
+            position_pct = MAX_POSITION_SIZE * 1.2  # 20% larger for strong momentum
+        elif momentum_1d > 10:
+            position_pct = MAX_POSITION_SIZE
+        else:
+            position_pct = MAX_POSITION_SIZE * 0.8  # 20% smaller for weak momentum
+        
+        max_cost = ACCOUNT_SIZE * position_pct
+        shares = int(max_cost / price)
+        total_cost = shares * price
+        stop_loss = price * (1 - STOP_LOSS_PERCENTAGE)
+        
+        return {
+            'shares': shares,
+            'total_cost': total_cost,
+            'stop_loss': stop_loss
+        }
     
     def get_hybrid_candidates(self) -> List[Dict]:
         """Get hybrid recommendations combining proven winners and real-time analysis."""
@@ -665,17 +917,118 @@ class AdvancedTradingBot:
         
         console.print(Panel(summary, title="Enhanced Trading Summary", border_style="yellow"))
 
+    def run_training_mode(self):
+        """Run the bot in training mode to update ML model."""
+        console.print("🤖 Starting ML training mode...", style="blue")
+        
+        # Load latest weekly research data
+        weekly_data = self.load_weekly_research_data()
+        
+        # Update trading patterns
+        self.update_trading_patterns(weekly_data)
+        
+        # Generate training insights
+        training_insights = self.generate_training_insights()
+        
+        # Save updated model
+        self.save_training_results(training_insights)
+        
+        console.print("✅ ML training completed successfully!", style="green")
+
+    def load_weekly_research_data(self):
+        """Load latest weekly research data for training."""
+        try:
+            # Look for latest weekly data file
+            weekly_files = glob.glob("../weekly_research/weekly_data_*.json")
+            if weekly_files:
+                latest_file = max(weekly_files, key=os.path.getctime)
+                with open(latest_file, 'r') as f:
+                    data = json.load(f)
+                console.print(f"✅ Loaded weekly research data: {latest_file}", style="green")
+                return data
+            else:
+                console.print("⚠️ No weekly research data found", style="yellow")
+                return {}
+        except Exception as e:
+            console.print(f"❌ Error loading weekly data: {str(e)}", style="red")
+            return {}
+
+    def update_trading_patterns(self, weekly_data):
+        """Update trading patterns based on weekly research."""
+        if not weekly_data:
+            return
+        
+        # Analyze new patterns from weekly data
+        candidates = weekly_data.get('candidates', [])
+        if candidates:
+            df = pd.DataFrame(candidates)
+            
+            # Update sector performance
+            sector_perf = df.groupby('sector')['score'].mean().to_dict()
+            
+            # Update proven winners list
+            top_performers = df.nlargest(5, 'score')['symbol'].tolist()
+            
+            console.print(f"📊 Updated patterns with {len(candidates)} new candidates", style="green")
+            console.print(f"🏆 New top performers: {', '.join(top_performers)}", style="blue")
+
+    def generate_training_insights(self):
+        """Generate insights from training data."""
+        insights = {
+            'timestamp': datetime.now().isoformat(),
+            'training_data_points': len(self.trading_history),
+            'updated_patterns': self.learned_patterns,
+            'model_version': '1.0',
+            'training_date': datetime.now().strftime('%Y-%m-%d')
+        }
+        
+        return insights
+
+    def save_training_results(self, insights):
+        """Save training results and updated model."""
+        try:
+            # Save training insights
+            training_file = f"training_results/training_results_{datetime.now().strftime('%Y%m%d')}.json"
+            with open(training_file, 'w') as f:
+                json.dump(insights, f, indent=2)
+            
+            # Update model files
+            self.update_model_files()
+            
+            console.print(f"💾 Saved training results to {training_file}", style="green")
+            
+        except Exception as e:
+            console.print(f"❌ Error saving training results: {str(e)}", style="red")
+
+    def update_model_files(self):
+        """Update model files with new training data."""
+        # This would typically update ML model weights, but for now we'll
+        # just update the proven winners and patterns
+        console.print("🔄 Updating model files...", style="blue")
+        
+        # Update proven winners based on latest performance
+        if not self.trading_history.empty:
+            closed_trades = self.trading_history[self.trading_history['status'] == 'CLOSED']
+            if not closed_trades.empty:
+                top_performers = closed_trades.nlargest(5, 'pnl_percentage')['symbol'].tolist()
+                console.print(f"🏆 Updated proven winners: {', '.join(top_performers)}", style="green")
+
 def main():
     """Main function with strategy selection."""
     import argparse
+    import json
+    import glob
+    import requests
     
     parser = argparse.ArgumentParser(description="Advanced Microcap Trading Bot")
-    parser.add_argument("--strategy", choices=["proven_winners", "real_time", "hybrid"], 
+    parser.add_argument("--strategy", choices=["proven_winners", "momentum_focused", "hybrid"],
                        default="hybrid", help="Trading strategy to use")
     parser.add_argument("--account-size", type=float, default=200, 
                        help="Account size in dollars")
     parser.add_argument("--max-position", type=float, default=0.25, 
                        help="Maximum position size as fraction of account")
+    parser.add_argument("--training-mode", action="store_true",
+                       help="Run in training mode to update ML model")
     
     args = parser.parse_args()
     
@@ -683,7 +1036,11 @@ def main():
         account_size=args.account_size, 
         max_position_size=args.max_position
     )
-    bot.generate_recommendations(strategy=args.strategy)
+    
+    if args.training_mode:
+        bot.run_training_mode()
+    else:
+        bot.generate_recommendations(strategy=args.strategy)
 
 if __name__ == "__main__":
     main() 

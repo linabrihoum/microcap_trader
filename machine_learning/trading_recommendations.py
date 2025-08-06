@@ -40,12 +40,12 @@ class TradingRecommendations:
     def get_current_holdings(self):
         """Get current portfolio holdings."""
         try:
-            df = pd.read_csv("portfolio.csv")
+            df = pd.read_csv("data/portfolio.csv")
             return df[df['shares'] > 0]
         except FileNotFoundError:
             try:
                 # Try relative path from machine_learning folder
-                df = pd.read_csv("../portfolio.csv")
+                df = pd.read_csv("../data/portfolio.csv")
                 return df[df['shares'] > 0]
             except FileNotFoundError:
                 return pd.DataFrame()
